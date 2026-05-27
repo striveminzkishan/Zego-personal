@@ -17,9 +17,11 @@ class VoiceEngine {
     this.allRemoteMuted = false;
     this.voiceEffect = 'none';
     this.mediaPlayer = null;
-    this.bgmSourceNode = null;
+    this.bgmMixSource = null;
+    this.bgmGainNode = null;
     this.micMixSource = null;
     this.mixDestination = null;
+    this.bgmLocalOnly = false;
     this.soundLevelTimer = null;
     this.eventHandlers = [];
 
@@ -286,21 +288,61 @@ class VoiceEngine {
     this._teardownMixGraph();
     this.mediaPlayer = new Audio();
     this.mediaPlayer.loop = false;
+    this.mediaPlayer.crossOrigin = 'anonymous';
+    this.mediaPlayer.preload = 'auto';
     this._emit('onMediaPlayerCreated', {});
     return this.mediaPlayer;
   }
 
-  loadMedia(url) {
+  async loadMedia(url) {
     if (!this.mediaPlayer) this.createMediaPlayer();
-    this.mediaPlayer.src = url;
-    this.mediaPlayer.load();
+    this._teardownBgmMix();
+    this.bgmLocalOnly = false;
+
+    try {
+      await this._loadMediaElement(url, 'anonymous');
+      console.log('[Engine] BGM loaded (with CORS):', url);
+    } catch {
+      await this._loadMediaElement(url, null);
+      this.bgmLocalOnly = true;
+      console.warn('[Engine] BGM loaded without CORS — local playback only');
+    }
+  }
+
+  _loadMediaElement(url, crossOriginMode) {
+    const el = this.mediaPlayer;
+    if (crossOriginMode) el.crossOrigin = crossOriginMode;
+    else el.removeAttribute('crossorigin');
+    el.src = url;
+    return new Promise((resolve, reject) => {
+      const onReady = () => { cleanup(); resolve(); };
+      const onErr = () => {
+        cleanup();
+        reject(new Error('Could not load audio'));
+      };
+      const cleanup = () => {
+        el.removeEventListener('canplaythrough', onReady);
+        el.removeEventListener('error', onErr);
+      };
+      el.addEventListener('canplaythrough', onReady, { once: true });
+      el.addEventListener('error', onErr, { once: true });
+      el.load();
+    });
   }
 
   async playMedia() {
-    if (!this.mediaPlayer) return;
+    if (!this.mediaPlayer) throw new Error('BGM player not ready');
+    if (!this.mediaPlayer.src) throw new Error('Load a BGM URL or file first');
+    if (!this.localStream) throw new Error('Microphone is not active');
+
+    if (this.audioContext?.state === 'suspended') {
+      await this.audioContext.resume();
+    }
+
     await this.mediaPlayer.play();
-    this._mixAuxIntoStream();
+    this._mixBgmForPeers();
     this._emit('onMediaPlayerStateChanged', { state: 'playing' });
+    console.log('[Engine] BGM playing');
   }
 
   pauseMedia() {
@@ -314,12 +356,16 @@ class VoiceEngine {
     if (this.mediaPlayer) {
       this.mediaPlayer.pause();
       this.mediaPlayer.currentTime = 0;
-      this._emit('onMediaPlayerStateChanged', { state: 'stopped' });
     }
+    this._teardownBgmMix();
+    this._applyMicTrackToPeers();
+    this._emit('onMediaPlayerStateChanged', { state: 'stopped' });
   }
 
   setMediaVolume(vol) {
-    if (this.mediaPlayer) this.mediaPlayer.volume = vol;
+    const v = Math.max(0, Math.min(1, Number(vol)));
+    if (this.mediaPlayer) this.mediaPlayer.volume = v;
+    if (this.bgmGainNode) this.bgmGainNode.gain.value = v;
   }
 
   destroyMediaPlayer() {
@@ -337,11 +383,19 @@ class VoiceEngine {
     return this.localStream?.getAudioTracks()[0] || null;
   }
 
-  _teardownMixGraph() {
-    if (this.bgmSourceNode) {
-      this.bgmSourceNode.disconnect();
-      this.bgmSourceNode = null;
+  _teardownBgmMix() {
+    if (this.bgmMixSource) {
+      this.bgmMixSource.disconnect();
+      this.bgmMixSource = null;
     }
+    if (this.bgmGainNode) {
+      this.bgmGainNode.disconnect();
+      this.bgmGainNode = null;
+    }
+  }
+
+  _teardownMixGraph() {
+    this._teardownBgmMix();
     if (this.micMixSource) {
       this.micMixSource.disconnect();
       this.micMixSource = null;
@@ -349,8 +403,31 @@ class VoiceEngine {
     this.mixDestination = null;
   }
 
-  _mixAuxIntoStream() {
+  _captureBgmStream() {
+    if (!this.mediaPlayer) return null;
+    if (typeof this.mediaPlayer.captureStream === 'function') {
+      return this.mediaPlayer.captureStream();
+    }
+    if (typeof this.mediaPlayer.mozCaptureStream === 'function') {
+      return this.mediaPlayer.mozCaptureStream();
+    }
+    return null;
+  }
+
+  _mixBgmForPeers() {
     if (!this.audioContext || !this.mediaPlayer || !this.localStream) return;
+
+    if (this.bgmLocalOnly) {
+      console.warn('[Engine] BGM plays locally only (URL has no CORS — use a local file for room-wide BGM)');
+      return;
+    }
+
+    const captured = this._captureBgmStream();
+    const bgmTrack = captured?.getAudioTracks?.()[0];
+    if (!bgmTrack) {
+      console.warn('[Engine] BGM plays locally only (captureStream unavailable)');
+      return;
+    }
 
     if (!this.mixDestination) {
       this.mixDestination = this.audioContext.createMediaStreamDestination();
@@ -361,14 +438,20 @@ class VoiceEngine {
       this.micMixSource.connect(this.mixDestination);
     }
 
-    // createMediaElementSource may only be called once per <audio> element
-    if (!this.bgmSourceNode) {
-      this.bgmSourceNode = this.audioContext.createMediaElementSource(this.mediaPlayer);
-      this.bgmSourceNode.connect(this.mixDestination);
-      this.bgmSourceNode.connect(this.audioContext.destination);
+    this._teardownBgmMix();
+
+    if (!this.bgmGainNode) {
+      this.bgmGainNode = this.audioContext.createGain();
+      this.bgmGainNode.gain.value = this.mediaPlayer.volume;
     }
 
+    const bgmStream = new MediaStream([bgmTrack]);
+    this.bgmMixSource = this.audioContext.createMediaStreamSource(bgmStream);
+    this.bgmMixSource.connect(this.bgmGainNode);
+    this.bgmGainNode.connect(this.mixDestination);
+
     this._applyMixedTrackToPeers();
+    console.log('[Engine] BGM mixed into voice stream for remote peers');
   }
 
   _applyMixedTrackToPeers() {

@@ -408,10 +408,13 @@
   <div class="card" style="padding:16px 20px;">
     <div style="font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px;">Background Music (BGM)</div>
     <div class="bgm-row">
-      <input type="text" id="bgm-url" placeholder="Paste audio URL (.mp3, .ogg…)" />
+      <input type="text" id="bgm-url" placeholder="URL or pick a file below" />
       <button class="ctrl-btn" onclick="bgmLoad()" style="min-width:60px;">Load</button>
       <button class="ctrl-btn" id="btn-bgm-play" onclick="bgmPlay()"><span class="icon">▶️</span></button>
       <button class="ctrl-btn" onclick="bgmStop()"><span class="icon">⏹️</span></button>
+    </div>
+    <div class="bgm-row" style="margin-top:8px;">
+      <input type="file" id="bgm-file" accept="audio/*" style="flex:1;font-size:12px;color:var(--muted);" onchange="bgmLoadFile(this)" />
     </div>
     <div class="bgm-row" style="margin-top:8px;">
       <span style="font-size:12px;color:var(--muted);">Vol</span>
@@ -506,21 +509,53 @@
   }
 
   // ── BGM ───────────────────────────────────────────────────────────────────
-  function bgmLoad() {
+  let bgmObjectUrl = null;
+
+  async function bgmLoad() {
     const url = document.getElementById('bgm-url').value.trim();
-    if (!url) return;
-    rm?.loadBGM(url);
-    logMsg(null, 'BGM loaded');
+    if (!url) { alert('Paste a URL or choose a local audio file.'); return; }
+    try {
+      await rm?.loadBGM(url);
+      logMsg(null, 'BGM loaded — press Play (remote URLs may be local-only without CORS)');
+    } catch (e) {
+      alert(e.message || 'Failed to load BGM');
+      logMsg(null, 'BGM load failed: ' + (e.message || e));
+    }
   }
-  function bgmPlay() {
+
+  async function bgmLoadFile(input) {
+    const file = input.files?.[0];
+    if (!file) return;
+    if (bgmObjectUrl) URL.revokeObjectURL(bgmObjectUrl);
+    bgmObjectUrl = URL.createObjectURL(file);
+    document.getElementById('bgm-url').value = file.name;
+    try {
+      await rm?.loadBGM(bgmObjectUrl);
+      logMsg(null, `BGM loaded: ${file.name} — press Play (shared with room)`);
+    } catch (e) {
+      alert(e.message || 'Failed to load file');
+    }
+  }
+
+  async function bgmPlay() {
+    if (!rm) return;
     const btn = document.getElementById('btn-bgm-play');
-    btn.querySelector('.icon').textContent = '⏸️';
-    rm?.playBGM();
+    try {
+      await rm.playBGM();
+      btn.querySelector('.icon').textContent = '⏸️';
+      logMsg(null, 'BGM playing');
+    } catch (e) {
+      alert(e.message || 'Could not play BGM');
+      logMsg(null, 'BGM play failed: ' + (e.message || e));
+    }
   }
+
   function bgmStop() {
     document.getElementById('btn-bgm-play').querySelector('.icon').textContent = '▶️';
     rm?.stopBGM();
+    logMsg(null, 'BGM stopped');
   }
+
   function bgmVol(v) { rm?.setBGMVolume(parseFloat(v)); }
 
   // ── Seats ─────────────────────────────────────────────────────────────────

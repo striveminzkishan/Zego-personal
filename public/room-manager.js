@@ -131,8 +131,8 @@ class RoomManager {
   }
 
   createBGMPlayer() { return this.engine.createMediaPlayer(); }
-  loadBGM(url) { this.engine.loadMedia(url); }
-  playBGM() { this.engine.playMedia(); }
+  loadBGM(url) { return this.engine.loadMedia(url); }
+  playBGM() { return this.engine.playMedia(); }
   pauseBGM() { this.engine.pauseMedia(); }
   stopBGM() { this.engine.stopMedia(); }
   setBGMVolume(v) { this.engine.setMediaVolume(v); }
