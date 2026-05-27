@@ -109,6 +109,11 @@ class RoomManager {
   _broadcastRoomSignal(data) { this.socket.emit('barrage', { roomId: this.roomId, data }); }
   _sendCustomCommand(targetSocketId, data) { this.socket.emit('custom-command', { to: targetSocketId, data }); }
 
+  // Only one peer per pair sends the offer (avoids offer/answer glare).
+  _shouldInitiate(remoteSocketId) {
+    return this.mySocketId && this.mySocketId < remoteSocketId;
+  }
+
   createBGMPlayer() { return this.engine.createMediaPlayer(); }
   loadBGM(url) { this.engine.loadMedia(url); }
   playBGM() { this.engine.playMedia(); }
@@ -169,20 +174,21 @@ class RoomManager {
       peers.forEach(p => { this.peers[p.socketId] = p; });
       this._emit('onRoomStateChanged', { state: 'connected', roomId });
       if (this.isHost) await this.autoTakeSeat0AsHost();
-      // Send offer to every existing peer
+      // Initiator sends offer; the other peer answers (one negotiation per pair).
       for (const peer of peers) {
-        await this._startPublishingTo(peer.socketId);
+        if (this._shouldInitiate(peer.socketId)) {
+          await this._startPublishingTo(peer.socketId);
+        }
       }
       this._emit('onRoomJoined', { roomId, peers });
     });
 
-    // FIX: when a new peer joins, the EXISTING users must also send them an offer
-    // Previously this was missing — only the new joiner sent offers, not the existing peers
     s.on('peer-joined', async ({ socketId, userName }) => {
       this.peers[socketId] = { socketId, userName, muted: false };
       this._emit('onPeerJoined', { socketId, userName });
-      // Existing peer sends offer to the newcomer
-      await this._startPublishingTo(socketId);
+      if (this._shouldInitiate(socketId)) {
+        await this._startPublishingTo(socketId);
+      }
     });
 
     s.on('peer-left', ({ socketId }) => {
@@ -201,6 +207,10 @@ class RoomManager {
     // FIX: answerer also needs to set up ontrack before handling offer
     s.on('offer', async ({ from, offer }) => {
       console.log(`[Room] Got offer from ${from}`);
+      if (this._shouldInitiate(from)) {
+        console.log(`[Room] Ignoring offer from ${from} (we are initiator for this pair)`);
+        return;
+      }
       const pc = await this.engine.createPeerConnection(from, false);
 
       // FIX: attach ontrack on answerer side too

@@ -151,6 +151,10 @@ class VoiceEngine {
   async handleAnswer(socketId, answer) {
     const pc = this.peerConnections[socketId];
     if (!pc) return;
+    if (pc.signalingState !== 'have-local-offer') {
+      console.warn(`[Engine] Ignoring stale answer from ${socketId} (state: ${pc.signalingState})`);
+      return;
+    }
     await pc.setRemoteDescription(new RTCSessionDescription(answer));
     // FIX: flush queued ICE candidates after remote desc is set
     await this._flushIceCandidates(socketId);
