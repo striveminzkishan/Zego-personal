@@ -54,7 +54,7 @@ class RoomManager {
     this.isHost = isHost;
     this.roomState = 'connecting';
     this._emit('onRoomStateChanged', { state: 'connecting', roomId });
-    this.socket.emit('join-room', { roomId, userName: this.userName });
+    this.socket.emit('join-room', { roomId, userName: this.userName, isHost });
   }
 
   _attemptReconnect() {
@@ -67,53 +67,48 @@ class RoomManager {
     this.roomState = 'reconnecting';
     this._emit('onRoomStateChanged', { state: 'reconnecting', attempt: this._reconnectAttempts });
     setTimeout(() => {
-      if (this.roomId) this.socket.emit('join-room', { roomId: this.roomId, userName: this.userName });
+      if (this.roomId) {
+        this.socket.emit('join-room', {
+          roomId: this.roomId,
+          userName: this.userName,
+          isHost: this.isHost
+        });
+      }
     }, Math.min(1000 * this._reconnectAttempts, 8000));
   }
 
   async autoTakeSeat0AsHost() {
     if (!this.isHost) return;
-    await this.takeSeat(0);
-    this._broadcastRoomSignal({ type: 'seat_update', seats: this.seats });
+    this.takeSeat(0);
   }
 
-  async takeSeat(seatIndex) {
-    if (seatIndex < 0 || seatIndex > 7) return;
-    if (this.seats[seatIndex]) { this._emit('onSeatTakeFailed', { seatIndex, reason: 'occupied' }); return; }
-    const curIdx = this.seats.findIndex(s => s?.socketId === this.mySocketId);
-    if (curIdx !== -1) this.seats[curIdx] = null;
-    this.seats[seatIndex] = { socketId: this.mySocketId, userId: this.myUserId, userName: this.userName, muted: this.engine.micMuted };
-    this._broadcastRoomSignal({ type: 'seat_update', seats: this.seats });
-    this._emit('onSeatChanged', { seatIndex, user: this.seats[seatIndex] });
+  takeSeat(seatIndex) {
+    if (seatIndex < 0 || seatIndex > 7 || !this.roomId) return;
+    this.socket.emit('take-seat', { roomId: this.roomId, seatIndex });
+  }
+
+  _applySeats(seats) {
+    if (!seats || !Array.isArray(seats)) return;
+    this.seats = seats.map(s => s ? { ...s } : null);
+    while (this.seats.length < 8) this.seats.push(null);
+    this._emit('onSeatUpdate', { seats: this.seats });
   }
 
   sendSeatInvite(targetSocketId, seatIndex) { this._sendCustomCommand(targetSocketId, { type: 'seat_invite', seatIndex }); }
 
   removeSpeakerFromSeat(seatIndex) {
-    if (!this.isHost) return;
-    const occupant = this.seats[seatIndex];
-    if (!occupant) return;
-    this.seats[seatIndex] = null;
-    this._sendCustomCommand(occupant.socketId, { type: 'removed_from_seat', seatIndex });
-    this._broadcastRoomSignal({ type: 'seat_update', seats: this.seats });
-    this._emit('onSeatRemoved', { seatIndex, removedUser: occupant });
+    if (!this.isHost || !this.roomId) return;
+    this.socket.emit('remove-from-seat', { roomId: this.roomId, seatIndex });
   }
 
   leaveSeat() {
-    const idx = this.seats.findIndex(s => s?.socketId === this.mySocketId);
-    if (idx !== -1) {
-      this.seats[idx] = null;
-      this._broadcastRoomSignal({ type: 'seat_update', seats: this.seats });
-      this._emit('onSeatChanged', { seatIndex: idx, user: null });
-    }
+    if (!this.roomId) return;
+    this.socket.emit('leave-seat', { roomId: this.roomId });
   }
 
   toggleMic() {
     const muted = this.engine.toggleMic();
     this.socket.emit('toggle-mute', { roomId: this.roomId, muted });
-    const idx = this.seats.findIndex(s => s?.socketId === this.mySocketId);
-    if (idx !== -1 && this.seats[idx]) this.seats[idx].muted = muted;
-    this._broadcastRoomSignal({ type: 'seat_update', seats: this.seats });
     return muted;
   }
 
@@ -171,14 +166,15 @@ class RoomManager {
   _bindSocketEvents() {
     const s = this.socket;
 
-    s.on('room-joined', async ({ roomId, userId, peers }) => {
+    s.on('room-joined', async ({ roomId, userId, peers, seats }) => {
       this.mySocketId = s.id;
       this.myUserId = userId;
       this.roomState = 'connected';
       this._reconnectAttempts = 0;
       peers.forEach(p => { this.peers[p.socketId] = p; });
+      this._applySeats(seats);
       this._emit('onRoomStateChanged', { state: 'connected', roomId });
-      if (this.isHost) await this.autoTakeSeat0AsHost();
+      if (this.isHost) this.autoTakeSeat0AsHost();
       // Initiator sends offer; the other peer answers (one negotiation per pair).
       for (const peer of peers) {
         if (this._shouldInitiate(peer.socketId)) {
@@ -199,14 +195,22 @@ class RoomManager {
     s.on('peer-left', ({ socketId }) => {
       const peer = this.peers[socketId];
       this.engine.closePeerConnection(socketId);
-      // Remove their audio element
       const el = document.getElementById(`audio-${socketId}`);
       if (el) el.remove();
       delete this.peers[socketId];
-      const idx = this.seats.findIndex(s => s?.socketId === socketId);
-      if (idx !== -1) { this.seats[idx] = null; }
       this._emit('onPeerLeft', { socketId, userName: peer?.userName });
-      this._emit('onSeatUpdate', { seats: this.seats });
+    });
+
+    s.on('seat-update', ({ seats }) => {
+      this._applySeats(seats);
+    });
+
+    s.on('seat-take-failed', ({ seatIndex, reason }) => {
+      this._emit('onSeatTakeFailed', { seatIndex, reason });
+    });
+
+    s.on('removed-from-seat', ({ seatIndex }) => {
+      this._emit('onRemovedFromSeat', { seatIndex });
     });
 
     // FIX: answerer also needs to set up ontrack before handling offer
@@ -232,22 +236,15 @@ class RoomManager {
 
     s.on('peer-mute-changed', ({ socketId, muted }) => {
       if (this.peers[socketId]) this.peers[socketId].muted = muted;
-      const idx = this.seats.findIndex(s => s?.socketId === socketId);
-      if (idx !== -1 && this.seats[idx]) this.seats[idx].muted = muted;
       this._emit('onPeerMuteChanged', { socketId, muted });
     });
 
     s.on('barrage', ({ from, data }) => {
-      if (data.type === 'seat_update') {
-        this.seats = data.seats;
-        this._emit('onSeatUpdate', { seats: this.seats });
-      }
       this._emit('onBarrageReceived', { from, data });
     });
 
     s.on('custom-command', ({ from, data }) => {
       if (data.type === 'seat_invite') this._emit('onSeatInviteReceived', { from, seatIndex: data.seatIndex });
-      if (data.type === 'removed_from_seat') { this.leaveSeat(); this._emit('onRemovedFromSeat', { seatIndex: data.seatIndex }); }
       this._emit('onCustomCommand', { from, data });
     });
 

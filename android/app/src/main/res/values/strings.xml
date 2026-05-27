@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Voice Room</string>
+    <string name="server_url_hint">Server URL (e.g. http://10.0.2.2:3000)</string>
+    <string name="user_name_hint">Your name</string>
+    <string name="room_id_hint">Room ID</string>
+    <string name="join_room">Join voice room</string>
+    <string name="leave_room">Leave</string>
+    <string name="toggle_mic">Toggle mic</string>
+    <string name="mute_all_remote">Mute all remote</string>
+    <string name="host_checkbox">Join as host</string>
+</resources>

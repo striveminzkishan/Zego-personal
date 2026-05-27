@@ -33,6 +33,12 @@
 
 ---
 
+## Android (native Java — Option B)
+
+See **[android/README.md](android/README.md)** for the native WebRTC SDK that replaces Zego in your Java chat app. Open the `android/` folder in Android Studio.
+
+---
+
 ## Quick Start
 
 ### 1. Install dependencies

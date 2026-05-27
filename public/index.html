@@ -568,7 +568,9 @@
       div.className = 'seat' + (seat ? ' occupied' : ' empty') +
                       (seat?.socketId === myId ? ' mine' : '') +
                       (myIsHost && seat && seat.socketId !== myId ? ' host-view' : '');
-      div.onclick = () => { if (!seat) rm?.takeSeat(i); };
+      div.onclick = () => {
+        if (!seat) rm?.takeSeat(i);
+      };
 
       div.innerHTML = `<span class="seat-num">${i === 0 ? '👑 0' : i}</span>` +
         (seat ? `
@@ -639,13 +641,16 @@
   // ── Event Handler (IExpressEngineEventHandler equivalent) ─────────────────
   const eventHandler = {
     onRoomStateChanged({ state }) { setBadge(state); logMsg(null, `Room state: ${state}`); },
-    onRoomJoined({ roomId, peers }) { logMsg(null, `In room. ${peers.length} existing peer(s).`); },
+    onRoomJoined({ roomId, peers }) {
+      logMsg(null, `In room. ${peers.length} existing peer(s).`);
+      renderSeats(rm?.seats || Array(8).fill(null));
+    },
     onLeftRoom({ roomId }) { logMsg(null, 'Left room.'); },
     onPeerJoined({ socketId, userName }) { logMsg(null, `${userName} joined`); updatePeerCount(); },
     onPeerLeft({ socketId, userName }) { logMsg(null, `${userName || socketId} left`); updatePeerCount(); },
     onPeerMuteChanged({ socketId, muted }) { /* seats will re-render */ },
     onSeatUpdate({ seats }) { renderSeats(seats); },
-    onSeatChanged({ seatIndex, user }) { renderSeats(rm?.seats || []); },
+    onSeatChanged({ seatIndex, user }) { renderSeats(rm?.seats || Array(8).fill(null)); },
     onSeatTakeFailed({ seatIndex, reason }) { logMsg(null, `Seat ${seatIndex} is occupied.`); },
     onSeatInviteReceived({ from, seatIndex }) {
       if (confirm(`You've been invited to seat ${seatIndex}. Accept?`)) rm?.takeSeat(seatIndex);
