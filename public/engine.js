@@ -1,29 +1,34 @@
 /**
- * VoiceEngine.js
- * Replaces: ZegoExpressEngine + ZEGOSDKManager.expressService
- * Handles: mic, streams, AEC, voice effects, sound levels, media player (BGM)
+ * VoiceEngine.js — Fixed version
+ * Key fixes:
+ *  - ICE candidates queued until remote description is set
+ *  - TURN servers added for Render/cloud deployment
+ *  - ontrack fires immediately, audio attached reliably
  */
 
 class VoiceEngine {
   constructor() {
     this.localStream = null;
-    this.peerConnections = {}; // socketId -> RTCPeerConnection
-    this.remoteStreams = {};   // socketId -> MediaStream
+    this.peerConnections = {};
+    this.remoteStreams = {};
     this.audioContext = null;
-    this.gainNode = null;
-    this.analyserNodes = {};   // socketId|'local' -> AnalyserNode
+    this.analyserNodes = {};
     this.micMuted = false;
     this.allRemoteMuted = false;
     this.voiceEffect = 'none';
-    this.mediaPlayer = null;   // BGM player
-    this.auxStream = null;     // BGM MediaElementSource
+    this.mediaPlayer = null;
+    this.auxStream = null;
     this.soundLevelTimer = null;
-    this.eventHandlers = [];   // registered IExpressEngineEventHandlers
+    this.eventHandlers = [];
 
-    // ICE config — replace with your TURN server for production
+    // FIX: queue ICE candidates per peer until remote desc is ready
+    this._iceCandidateQueues = {};
+
     this.iceConfig = {
       iceServers: [
         { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:stun1.l.google.com:19302' },
+        // Free public TURN — works on Render/cloud
         {
           urls: 'turn:openrelay.metered.ca:80',
           username: 'openrelayproject',
@@ -43,19 +48,17 @@ class VoiceEngine {
     };
   }
 
-  // ── 1. Init ────────────────────────────────────────────────────────────────
   async init() {
     this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
     await this.audioContext.resume();
-    console.log('[Engine] AudioContext initialized');
+    console.log('[Engine] AudioContext ready');
   }
 
-  // ── 2. Local stream (mic capture with AEC) ────────────────────────────────
   async startLocalStream() {
     try {
       this.localStream = await navigator.mediaDevices.getUserMedia({
         audio: {
-          echoCancellation: true,   // 4.4 AEC
+          echoCancellation: true,
           noiseSuppression: true,
           autoGainControl: true,
           sampleRate: 48000
@@ -63,7 +66,7 @@ class VoiceEngine {
         video: false
       });
       this._setupLocalAnalyser();
-      console.log('[Engine] Local mic stream started');
+      console.log('[Engine] Mic stream started, tracks:', this.localStream.getTracks().length);
       return this.localStream;
     } catch (e) {
       console.error('[Engine] Mic access failed:', e);
@@ -78,21 +81,34 @@ class VoiceEngine {
     }
   }
 
-  // ── 3. Peer Connection (publish + play streams) ────────────────────────────
+  // FIX: tracks added BEFORE createOffer/createAnswer so they are in SDP
   async createPeerConnection(socketId, isInitiator) {
-    const pc = new RTCPeerConnection(this.iceConfig);
-    this.peerConnections[socketId] = pc;
-
-    // Add local tracks → publish stream
-    if (this.localStream) {
-      this.localStream.getTracks().forEach(track => pc.addTrack(track, this.localStream));
+    // Close old connection if exists
+    if (this.peerConnections[socketId]) {
+      this.peerConnections[socketId].close();
     }
 
-    // Receive remote stream → play stream
+    const pc = new RTCPeerConnection(this.iceConfig);
+    this.peerConnections[socketId] = pc;
+    this._iceCandidateQueues[socketId] = [];
+
+    // FIX: Add local tracks right away so they appear in SDP
+    if (this.localStream) {
+      this.localStream.getTracks().forEach(track => {
+        pc.addTrack(track, this.localStream);
+        console.log(`[Engine] Added local track to ${socketId}:`, track.kind);
+      });
+    } else {
+      console.warn('[Engine] No local stream when creating peer connection!');
+    }
+
+    // FIX: ontrack — store stream and attach audio immediately
     pc.ontrack = (e) => {
-      this.remoteStreams[socketId] = e.streams[0];
-      this._setupRemoteAnalyser(socketId, e.streams[0]);
-      this._emit('onRemoteStreamAdded', { socketId, stream: e.streams[0] });
+      console.log(`[Engine] Got remote track from ${socketId}:`, e.track.kind, 'streams:', e.streams.length);
+      const stream = e.streams[0] || new MediaStream([e.track]);
+      this.remoteStreams[socketId] = stream;
+      this._setupRemoteAnalyser(socketId, stream);
+      this._emit('onRemoteStreamAdded', { socketId, stream });
     };
 
     pc.onicecandidate = (e) => {
@@ -101,8 +117,13 @@ class VoiceEngine {
       }
     };
 
+    pc.oniceconnectionstatechange = () => {
+      console.log(`[Engine] ICE state ${socketId}:`, pc.iceConnectionState);
+      this._emit('onPeerConnectionState', { socketId, state: pc.iceConnectionState });
+    };
+
     pc.onconnectionstatechange = () => {
-      this._emit('onPeerConnectionState', { socketId, state: pc.connectionState });
+      console.log(`[Engine] Connection state ${socketId}:`, pc.connectionState);
     };
 
     return pc;
@@ -110,27 +131,60 @@ class VoiceEngine {
 
   async createOffer(socketId) {
     const pc = this.peerConnections[socketId];
-    const offer = await pc.createOffer();
+    const offer = await pc.createOffer({ offerToReceiveAudio: true });
     await pc.setLocalDescription(offer);
+    console.log(`[Engine] Created offer for ${socketId}`);
     return offer;
   }
 
   async handleOffer(socketId, offer) {
     const pc = this.peerConnections[socketId];
     await pc.setRemoteDescription(new RTCSessionDescription(offer));
+    // FIX: flush queued ICE candidates after remote desc is set
+    await this._flushIceCandidates(socketId);
     const answer = await pc.createAnswer();
     await pc.setLocalDescription(answer);
+    console.log(`[Engine] Created answer for ${socketId}`);
     return answer;
   }
 
   async handleAnswer(socketId, answer) {
     const pc = this.peerConnections[socketId];
+    if (!pc) return;
     await pc.setRemoteDescription(new RTCSessionDescription(answer));
+    // FIX: flush queued ICE candidates after remote desc is set
+    await this._flushIceCandidates(socketId);
+    console.log(`[Engine] Set answer from ${socketId}`);
   }
 
+  // FIX: queue candidates if remote description not ready yet
   async handleICECandidate(socketId, candidate) {
     const pc = this.peerConnections[socketId];
-    if (pc) await pc.addIceCandidate(new RTCIceCandidate(candidate));
+    if (!pc) return;
+    if (!pc.remoteDescription || !pc.remoteDescription.type) {
+      console.log(`[Engine] Queuing ICE candidate for ${socketId}`);
+      if (!this._iceCandidateQueues[socketId]) this._iceCandidateQueues[socketId] = [];
+      this._iceCandidateQueues[socketId].push(candidate);
+    } else {
+      try {
+        await pc.addIceCandidate(new RTCIceCandidate(candidate));
+      } catch (e) {
+        console.warn('[Engine] ICE candidate error:', e.message);
+      }
+    }
+  }
+
+  async _flushIceCandidates(socketId) {
+    const queue = this._iceCandidateQueues[socketId] || [];
+    console.log(`[Engine] Flushing ${queue.length} queued ICE candidates for ${socketId}`);
+    for (const candidate of queue) {
+      try {
+        await this.peerConnections[socketId].addIceCandidate(new RTCIceCandidate(candidate));
+      } catch (e) {
+        console.warn('[Engine] Queued ICE error:', e.message);
+      }
+    }
+    this._iceCandidateQueues[socketId] = [];
   }
 
   closePeerConnection(socketId) {
@@ -140,13 +194,13 @@ class VoiceEngine {
     }
     delete this.remoteStreams[socketId];
     delete this.analyserNodes[socketId];
+    delete this._iceCandidateQueues[socketId];
   }
 
   closeAllPeerConnections() {
     Object.keys(this.peerConnections).forEach(sid => this.closePeerConnection(sid));
   }
 
-  // ── 4.1 Mic mute/unmute ───────────────────────────────────────────────────
   setMicMuted(muted) {
     this.micMuted = muted;
     if (this.localStream) {
@@ -160,14 +214,12 @@ class VoiceEngine {
     return this.micMuted;
   }
 
-  // ── 4.2 Mute/unmute all remote streams ───────────────────────────────────
   setAllRemoteMuted(muted) {
     this.allRemoteMuted = muted;
     document.querySelectorAll('audio[data-remote]').forEach(el => { el.muted = muted; });
     this._emit('onRemoteMuteChanged', { muted });
   }
 
-  // ── 4.3 Sound level monitoring ────────────────────────────────────────────
   startSoundLevelMonitoring(intervalMs = 200) {
     if (this.soundLevelTimer) return;
     this.soundLevelTimer = setInterval(() => {
@@ -203,26 +255,23 @@ class VoiceEngine {
 
   _setupRemoteAnalyser(socketId, stream) {
     if (!this.audioContext) return;
-    const source = this.audioContext.createMediaStreamSource(stream);
-    const analyser = this.audioContext.createAnalyser();
-    analyser.fftSize = 256;
-    source.connect(analyser);
-    this.analyserNodes[socketId] = analyser;
+    try {
+      const source = this.audioContext.createMediaStreamSource(stream);
+      const analyser = this.audioContext.createAnalyser();
+      analyser.fftSize = 256;
+      source.connect(analyser);
+      this.analyserNodes[socketId] = analyser;
+    } catch (e) {
+      console.warn('[Engine] Remote analyser error:', e.message);
+    }
   }
 
-  // ── 4.4 AEC — applied at getUserMedia level (see startLocalStream) ─────────
-
-  // ── 4.5 Voice changer presets ────────────────────────────────────────────
   setVoiceEffect(preset) {
-    // preset: 'none' | 'robot' | 'cave' | 'deep' | 'high'
     this.voiceEffect = preset;
     this._emit('onVoiceEffectChanged', { preset });
-    // Note: real-time voice changing requires WebAudio pipeline with BiquadFilter/PitchShifter
-    // For production, integrate a WebAudio voice processor node here
-    console.log(`[Engine] Voice effect set to: ${preset}`);
+    console.log(`[Engine] Voice effect: ${preset}`);
   }
 
-  // ── 7. Media Player (BGM / AUX mixing) ───────────────────────────────────
   createMediaPlayer() {
     this.mediaPlayer = new Audio();
     this.mediaPlayer.loop = false;
@@ -258,7 +307,7 @@ class VoiceEngine {
     }
   }
 
-  setMediaVolume(vol) { // 0-1
+  setMediaVolume(vol) {
     if (this.mediaPlayer) this.mediaPlayer.volume = vol;
   }
 
@@ -278,7 +327,6 @@ class VoiceEngine {
     micSource.connect(dest);
     bgmSource.connect(dest);
     this.auxStream = bgmSource;
-    // Replace local stream tracks with mixed output
     const mixedTrack = dest.stream.getAudioTracks()[0];
     Object.values(this.peerConnections).forEach(pc => {
       const sender = pc.getSenders().find(s => s.track?.kind === 'audio');
@@ -286,20 +334,10 @@ class VoiceEngine {
     });
   }
 
-  // ── 9. Event handler registration/removal ─────────────────────────────────
-  addEventHandler(handler) {
-    this.eventHandlers.push(handler);
-  }
+  addEventHandler(handler) { this.eventHandlers.push(handler); }
+  removeEventHandler(handler) { this.eventHandlers = this.eventHandlers.filter(h => h !== handler); }
+  _emit(event, data) { this.eventHandlers.forEach(h => { if (typeof h[event] === 'function') h[event](data); }); }
 
-  removeEventHandler(handler) {
-    this.eventHandlers = this.eventHandlers.filter(h => h !== handler);
-  }
-
-  _emit(event, data) {
-    this.eventHandlers.forEach(h => { if (typeof h[event] === 'function') h[event](data); });
-  }
-
-  // ── Cleanup ────────────────────────────────────────────────────────────────
   destroy() {
     this.stopSoundLevelMonitoring();
     this.closeAllPeerConnections();
