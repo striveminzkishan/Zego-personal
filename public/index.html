@@ -628,7 +628,7 @@
     onRemoteStreamAdded({ socketId }) { logMsg(null, `Stream from ${rm?.peers[socketId]?.userName || socketId}`); },
     onSignedIn({ userName }) {},
     onSignedOut() {},
-    onICECandidate() {},
+    onICECandidate() { /* forwarded in RoomManager._bindEngineEvents */ },
     onPeerConnectionState({ socketId, state }) { if (state==='failed') logMsg(null,`Connection issue with peer`); },
   };
 </script>

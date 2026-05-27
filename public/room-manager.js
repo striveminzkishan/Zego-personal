@@ -22,6 +22,22 @@ class RoomManager {
     this._reconnectAttempts = 0;
     this._maxReconnect = 5;
     this._bindSocketEvents();
+    this._bindEngineEvents();
+  }
+
+  _bindEngineEvents() {
+    this.engine.addEventHandler({
+      onICECandidate: ({ socketId, candidate }) => {
+        if (!candidate || !this.roomId) return;
+        this.socket.emit('ice-candidate', {
+          to: socketId,
+          candidate: candidate.toJSON ? candidate.toJSON() : candidate
+        });
+      },
+      onRemoteStreamAdded: ({ socketId, stream }) => {
+        this._attachRemoteAudio(socketId, stream);
+      }
+    });
   }
 
   async signIn({ userName }) {
@@ -122,19 +138,8 @@ class RoomManager {
   setBGMVolume(v) { this.engine.setMediaVolume(v); }
   destroyBGMPlayer() { this.engine.destroyMediaPlayer(); }
 
-  // FIX: register ontrack BEFORE creating offer so we never miss it
   async _startPublishingTo(socketId) {
-    const pc = await this.engine.createPeerConnection(socketId, true);
-
-    // attach audio as soon as track arrives
-    pc.ontrack = (e) => {
-      const stream = e.streams[0] || new MediaStream([e.track]);
-      this.engine.remoteStreams[socketId] = stream;
-      this.engine._setupRemoteAnalyser(socketId, stream);
-      this.engine._emit('onRemoteStreamAdded', { socketId, stream });
-      this._attachRemoteAudio(socketId, stream);
-    };
-
+    await this.engine.createPeerConnection(socketId, true);
     const offer = await this.engine.createOffer(socketId);
     this.socket.emit('offer', { to: socketId, offer });
     console.log(`[Room] Sent offer to ${socketId}`);
@@ -211,17 +216,7 @@ class RoomManager {
         console.log(`[Room] Ignoring offer from ${from} (we are initiator for this pair)`);
         return;
       }
-      const pc = await this.engine.createPeerConnection(from, false);
-
-      // FIX: attach ontrack on answerer side too
-      pc.ontrack = (e) => {
-        const stream = e.streams[0] || new MediaStream([e.track]);
-        this.engine.remoteStreams[from] = stream;
-        this.engine._setupRemoteAnalyser(from, stream);
-        this.engine._emit('onRemoteStreamAdded', { socketId: from, stream });
-        this._attachRemoteAudio(from, stream);
-      };
-
+      await this.engine.createPeerConnection(from, false);
       const answer = await this.engine.handleOffer(from, offer);
       s.emit('answer', { to: from, answer });
     });

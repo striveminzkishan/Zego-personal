@@ -131,7 +131,7 @@ class VoiceEngine {
 
   async createOffer(socketId) {
     const pc = this.peerConnections[socketId];
-    const offer = await pc.createOffer({ offerToReceiveAudio: true });
+    const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
     console.log(`[Engine] Created offer for ${socketId}`);
     return offer;
@@ -164,7 +164,7 @@ class VoiceEngine {
   // FIX: queue candidates if remote description not ready yet
   async handleICECandidate(socketId, candidate) {
     const pc = this.peerConnections[socketId];
-    if (!pc) return;
+    if (!pc || !candidate) return;
     if (!pc.remoteDescription || !pc.remoteDescription.type) {
       console.log(`[Engine] Queuing ICE candidate for ${socketId}`);
       if (!this._iceCandidateQueues[socketId]) this._iceCandidateQueues[socketId] = [];
