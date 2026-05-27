@@ -17,7 +17,9 @@ class VoiceEngine {
     this.allRemoteMuted = false;
     this.voiceEffect = 'none';
     this.mediaPlayer = null;
-    this.auxStream = null;
+    this.bgmSourceNode = null;
+    this.micMixSource = null;
+    this.mixDestination = null;
     this.soundLevelTimer = null;
     this.eventHandlers = [];
 
@@ -93,7 +95,11 @@ class VoiceEngine {
     this._iceCandidateQueues[socketId] = [];
 
     // FIX: Add local tracks right away so they appear in SDP
-    if (this.localStream) {
+    const outboundTrack = this._getOutboundAudioTrack();
+    if (outboundTrack && this.localStream) {
+      pc.addTrack(outboundTrack, this.localStream);
+      console.log(`[Engine] Added local track to ${socketId}:`, outboundTrack.kind);
+    } else if (this.localStream) {
       this.localStream.getTracks().forEach(track => {
         pc.addTrack(track, this.localStream);
         console.log(`[Engine] Added local track to ${socketId}:`, track.kind);
@@ -277,6 +283,7 @@ class VoiceEngine {
   }
 
   createMediaPlayer() {
+    this._teardownMixGraph();
     this.mediaPlayer = new Audio();
     this.mediaPlayer.loop = false;
     this._emit('onMediaPlayerCreated', {});
@@ -318,23 +325,67 @@ class VoiceEngine {
   destroyMediaPlayer() {
     this.stopMedia();
     this.mediaPlayer = null;
-    if (this.auxStream) { this.auxStream.disconnect(); this.auxStream = null; }
+    this._teardownMixGraph();
+    this._applyMicTrackToPeers();
     this._emit('onMediaPlayerDestroyed', {});
+  }
+
+  _getOutboundAudioTrack() {
+    if (this.mixDestination) {
+      return this.mixDestination.stream.getAudioTracks()[0] || null;
+    }
+    return this.localStream?.getAudioTracks()[0] || null;
+  }
+
+  _teardownMixGraph() {
+    if (this.bgmSourceNode) {
+      this.bgmSourceNode.disconnect();
+      this.bgmSourceNode = null;
+    }
+    if (this.micMixSource) {
+      this.micMixSource.disconnect();
+      this.micMixSource = null;
+    }
+    this.mixDestination = null;
   }
 
   _mixAuxIntoStream() {
     if (!this.audioContext || !this.mediaPlayer || !this.localStream) return;
-    if (this.auxStream) { this.auxStream.disconnect(); }
-    const dest = this.audioContext.createMediaStreamDestination();
-    const micSource = this.audioContext.createMediaStreamSource(this.localStream);
-    const bgmSource = this.audioContext.createMediaElementSource(this.mediaPlayer);
-    micSource.connect(dest);
-    bgmSource.connect(dest);
-    this.auxStream = bgmSource;
-    const mixedTrack = dest.stream.getAudioTracks()[0];
+
+    if (!this.mixDestination) {
+      this.mixDestination = this.audioContext.createMediaStreamDestination();
+    }
+
+    if (!this.micMixSource) {
+      this.micMixSource = this.audioContext.createMediaStreamSource(this.localStream);
+      this.micMixSource.connect(this.mixDestination);
+    }
+
+    // createMediaElementSource may only be called once per <audio> element
+    if (!this.bgmSourceNode) {
+      this.bgmSourceNode = this.audioContext.createMediaElementSource(this.mediaPlayer);
+      this.bgmSourceNode.connect(this.mixDestination);
+      this.bgmSourceNode.connect(this.audioContext.destination);
+    }
+
+    this._applyMixedTrackToPeers();
+  }
+
+  _applyMixedTrackToPeers() {
+    const mixedTrack = this._getOutboundAudioTrack();
+    if (!mixedTrack) return;
     Object.values(this.peerConnections).forEach(pc => {
       const sender = pc.getSenders().find(s => s.track?.kind === 'audio');
-      if (sender && mixedTrack) sender.replaceTrack(mixedTrack);
+      if (sender) sender.replaceTrack(mixedTrack);
+    });
+  }
+
+  _applyMicTrackToPeers() {
+    const micTrack = this.localStream?.getAudioTracks()[0];
+    if (!micTrack) return;
+    Object.values(this.peerConnections).forEach(pc => {
+      const sender = pc.getSenders().find(s => s.track?.kind === 'audio');
+      if (sender) sender.replaceTrack(micTrack);
     });
   }
 
