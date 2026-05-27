@@ -1,0 +1,636 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>VoiceRoom — Self-Hosted</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg:        #0d0e12;
+      --surface:   #16181f;
+      --surface2:  #1e2029;
+      --border:    #2a2d38;
+      --accent:    #6c63ff;
+      --accent2:   #ff6584;
+      --green:     #4ade80;
+      --yellow:    #facc15;
+      --red:       #f87171;
+      --text:      #e8eaf0;
+      --muted:     #6b7280;
+      --radius:    14px;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'DM Sans', sans-serif;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    /* ── Lobby ── */
+    #lobby {
+      width: 100%;
+      max-width: 440px;
+      padding: 24px;
+    }
+    .logo {
+      font-family: 'Space Mono', monospace;
+      font-size: 22px;
+      color: var(--accent);
+      letter-spacing: -1px;
+      margin-bottom: 8px;
+    }
+    .logo span { color: var(--accent2); }
+    .sub { color: var(--muted); font-size: 14px; margin-bottom: 32px; }
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 28px;
+    }
+    .card h2 { font-size: 16px; font-weight: 600; margin-bottom: 20px; }
+    .field { margin-bottom: 16px; }
+    .field label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 6px; text-transform: uppercase; letter-spacing: .5px; }
+    .field input, .field select {
+      width: 100%;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--text);
+      font-family: 'DM Sans', sans-serif;
+      font-size: 15px;
+      padding: 11px 14px;
+      outline: none;
+      transition: border-color .2s;
+    }
+    .field input:focus, .field select:focus { border-color: var(--accent); }
+    .row { display: flex; gap: 10px; }
+    .row .field { flex: 1; }
+    .check-row { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; }
+    .check-row input[type=checkbox] { accent-color: var(--accent); width: 16px; height: 16px; }
+    .check-row label { font-size: 14px; color: var(--text); cursor: pointer; }
+    .btn {
+      width: 100%;
+      padding: 13px;
+      background: var(--accent);
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      font-family: 'DM Sans', sans-serif;
+      font-size: 15px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: opacity .2s, transform .1s;
+    }
+    .btn:hover { opacity: .88; }
+    .btn:active { transform: scale(.98); }
+    .btn.danger { background: var(--red); }
+    .btn.ghost {
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--text);
+    }
+    .btn.ghost:hover { border-color: var(--accent); color: var(--accent); }
+
+    /* ── Room ── */
+    #room {
+      display: none;
+      width: 100%;
+      max-width: 860px;
+      padding: 20px;
+      flex-direction: column;
+      gap: 16px;
+    }
+    #room.visible { display: flex; }
+
+    .room-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .room-title { font-family: 'Space Mono', monospace; font-size: 18px; }
+    .room-id { font-size: 12px; color: var(--muted); margin-top: 2px; }
+    .state-badge {
+      font-size: 11px;
+      font-weight: 600;
+      padding: 4px 10px;
+      border-radius: 20px;
+      background: var(--surface2);
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: .5px;
+    }
+    .state-badge.connected { background: #4ade8022; color: var(--green); }
+    .state-badge.reconnecting { background: #facc1522; color: var(--yellow); }
+    .state-badge.failed { background: #f8717122; color: var(--red); }
+
+    /* ── Seats grid ── */
+    .seats-section { }
+    .seats-label { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; margin-bottom: 12px; }
+    .seats-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 12px;
+    }
+    .seat {
+      background: var(--surface);
+      border: 1.5px solid var(--border);
+      border-radius: var(--radius);
+      padding: 16px 10px;
+      text-align: center;
+      cursor: pointer;
+      transition: border-color .2s, background .2s;
+      position: relative;
+      min-height: 110px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+    }
+    .seat:hover { border-color: var(--accent); }
+    .seat.occupied { cursor: default; border-color: var(--border); }
+    .seat.mine { border-color: var(--accent); background: #6c63ff12; }
+    .seat.empty { border-style: dashed; opacity: .55; }
+    .seat .seat-num {
+      position: absolute;
+      top: 6px; left: 8px;
+      font-size: 10px;
+      color: var(--muted);
+      font-family: 'Space Mono', monospace;
+    }
+    .seat .avatar {
+      width: 42px; height: 42px;
+      border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 18px;
+      font-weight: 600;
+      background: var(--surface2);
+      border: 2px solid var(--border);
+      position: relative;
+    }
+    .seat.mine .avatar { border-color: var(--accent); }
+    .seat .avatar .speaking-ring {
+      position: absolute;
+      inset: -4px;
+      border-radius: 50%;
+      border: 2.5px solid var(--green);
+      opacity: 0;
+      transition: opacity .15s;
+    }
+    .seat .avatar.speaking .speaking-ring { opacity: 1; }
+    .seat .seat-name { font-size: 13px; font-weight: 500; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .seat .seat-role { font-size: 10px; color: var(--muted); text-transform: uppercase; }
+    .seat .mute-dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      background: var(--green);
+    }
+    .seat .mute-dot.muted { background: var(--red); }
+    .seat .remove-btn {
+      position: absolute;
+      top: 6px; right: 6px;
+      background: #f8717122;
+      border: none;
+      color: var(--red);
+      font-size: 11px;
+      border-radius: 4px;
+      padding: 2px 6px;
+      cursor: pointer;
+      display: none;
+    }
+    .seat.occupied.host-view .remove-btn { display: block; }
+
+    /* ── Controls bar ── */
+    .controls {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 16px 20px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+    .ctrl-btn {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 5px;
+      background: var(--surface2);
+      border: 1.5px solid var(--border);
+      border-radius: 10px;
+      padding: 10px 14px;
+      cursor: pointer;
+      color: var(--text);
+      font-size: 13px;
+      font-family: 'DM Sans', sans-serif;
+      transition: border-color .15s, background .15s;
+      min-width: 70px;
+    }
+    .ctrl-btn:hover { border-color: var(--accent); }
+    .ctrl-btn.active { border-color: var(--accent); background: #6c63ff18; color: var(--accent); }
+    .ctrl-btn.danger-active { border-color: var(--red); background: #f8717118; color: var(--red); }
+    .ctrl-btn .icon { font-size: 20px; }
+    .controls .spacer { flex: 1; }
+    .leave-btn {
+      padding: 10px 22px;
+      background: var(--red);
+      border: none;
+      border-radius: 8px;
+      color: #fff;
+      font-family: 'DM Sans', sans-serif;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: opacity .2s;
+    }
+    .leave-btn:hover { opacity: .85; }
+
+    /* ── Voice effect picker ── */
+    .effect-row {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .effect-chip {
+      padding: 6px 14px;
+      border-radius: 20px;
+      border: 1px solid var(--border);
+      background: var(--surface2);
+      color: var(--muted);
+      font-size: 13px;
+      cursor: pointer;
+      transition: all .15s;
+    }
+    .effect-chip:hover { border-color: var(--accent); color: var(--text); }
+    .effect-chip.active { border-color: var(--accent); background: #6c63ff22; color: var(--accent); }
+
+    /* ── BGM player ── */
+    .bgm-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+    .bgm-row input[type=range] { accent-color: var(--accent); flex: 1; min-width: 80px; }
+    .bgm-row input[type=text] {
+      flex: 2;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text);
+      font-family: 'DM Sans', sans-serif;
+      font-size: 13px;
+      padding: 7px 10px;
+      outline: none;
+    }
+    .bgm-row input[type=text]:focus { border-color: var(--accent); }
+
+    /* ── Messages ── */
+    .msgs-box {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 14px;
+      height: 130px;
+      overflow-y: auto;
+      font-size: 13px;
+      color: var(--muted);
+      scrollbar-width: thin;
+    }
+    .msgs-box .msg { margin-bottom: 6px; line-height: 1.5; }
+    .msgs-box .msg .from { color: var(--accent); font-weight: 500; }
+    .msgs-box .msg .sys { color: var(--muted); font-style: italic; }
+
+    /* ── Level bars ── */
+    .levels-row { display: flex; gap: 6px; align-items: flex-end; height: 28px; }
+    .level-bar-wrap { display: flex; flex-direction: column; align-items: center; gap: 2px; }
+    .level-bar {
+      width: 8px;
+      background: var(--green);
+      border-radius: 3px;
+      transition: height .1s;
+      min-height: 2px;
+      max-height: 24px;
+    }
+
+    @media (max-width: 600px) {
+      .seats-grid { grid-template-columns: repeat(2, 1fr); }
+      #room { padding: 12px; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- ── Lobby ── -->
+<div id="lobby">
+  <div class="logo">voice<span>room</span></div>
+  <div class="sub">Self-hosted WebRTC · No SDK required</div>
+  <div class="card">
+    <h2>Join or Create a Room</h2>
+    <div class="row">
+      <div class="field">
+        <label>Your Name</label>
+        <input id="inp-name" type="text" placeholder="Alice" maxlength="24" />
+      </div>
+      <div class="field">
+        <label>Room ID</label>
+        <input id="inp-room" type="text" placeholder="room-123" maxlength="32" />
+      </div>
+    </div>
+    <div class="check-row">
+      <input id="chk-host" type="checkbox" />
+      <label for="chk-host">Join as Host (takes seat 0, can manage speakers)</label>
+    </div>
+    <button class="btn" onclick="joinRoom()">Enter Room</button>
+  </div>
+</div>
+
+<!-- ── Room ── -->
+<div id="room">
+  <div class="room-header">
+    <div>
+      <div class="room-title" id="room-title">Room</div>
+      <div class="room-id" id="room-id-label"></div>
+    </div>
+    <div style="display:flex;align-items:center;gap:10px;">
+      <div id="state-badge" class="state-badge">connecting</div>
+      <button class="leave-btn" onclick="leaveRoom()">Leave</button>
+    </div>
+  </div>
+
+  <!-- Sound levels -->
+  <div style="display:flex;align-items:center;gap:8px;">
+    <span style="font-size:12px;color:var(--muted);">Levels:</span>
+    <div class="levels-row" id="levels-row"></div>
+  </div>
+
+  <!-- Seats -->
+  <div class="seats-section">
+    <div class="seats-label">Speaker Seats (click empty seat to join)</div>
+    <div class="seats-grid" id="seats-grid"></div>
+  </div>
+
+  <!-- Controls -->
+  <div class="controls">
+    <button class="ctrl-btn" id="btn-mic" onclick="toggleMic()">
+      <span class="icon">🎙️</span><span id="mic-label">Mute</span>
+    </button>
+    <button class="ctrl-btn" id="btn-remote-mute" onclick="toggleRemoteMute()">
+      <span class="icon">🔇</span><span id="remote-label">Mute All</span>
+    </button>
+    <button class="ctrl-btn" id="btn-leaveseat" onclick="leaveSeat()">
+      <span class="icon">🪑</span><span>Leave Seat</span>
+    </button>
+    <div class="spacer"></div>
+    <div style="font-size:12px;color:var(--muted);">Peers: <span id="peer-count">0</span></div>
+  </div>
+
+  <!-- Voice Effects -->
+  <div class="card" style="padding:16px 20px;">
+    <div style="font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px;">Voice Effect</div>
+    <div class="effect-row" id="effect-row">
+      <div class="effect-chip active" onclick="setEffect('none',this)">Normal</div>
+      <div class="effect-chip" onclick="setEffect('robot',this)">🤖 Robot</div>
+      <div class="effect-chip" onclick="setEffect('cave',this)">🏔️ Cave</div>
+      <div class="effect-chip" onclick="setEffect('deep',this)">🐋 Deep</div>
+      <div class="effect-chip" onclick="setEffect('high',this)">🐭 High Pitch</div>
+    </div>
+  </div>
+
+  <!-- BGM Player -->
+  <div class="card" style="padding:16px 20px;">
+    <div style="font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px;">Background Music (BGM)</div>
+    <div class="bgm-row">
+      <input type="text" id="bgm-url" placeholder="Paste audio URL (.mp3, .ogg…)" />
+      <button class="ctrl-btn" onclick="bgmLoad()" style="min-width:60px;">Load</button>
+      <button class="ctrl-btn" id="btn-bgm-play" onclick="bgmPlay()"><span class="icon">▶️</span></button>
+      <button class="ctrl-btn" onclick="bgmStop()"><span class="icon">⏹️</span></button>
+    </div>
+    <div class="bgm-row" style="margin-top:8px;">
+      <span style="font-size:12px;color:var(--muted);">Vol</span>
+      <input type="range" id="bgm-vol" min="0" max="1" step="0.05" value="0.5" oninput="bgmVol(this.value)" />
+    </div>
+  </div>
+
+  <!-- Messages log -->
+  <div class="card" style="padding:14px;">
+    <div style="font-size:12px;color:var(--muted);margin-bottom:8px;text-transform:uppercase;letter-spacing:.5px;">Room Log</div>
+    <div class="msgs-box" id="msgs-box"></div>
+  </div>
+</div>
+
+<script src="/socket.io/socket.io.js"></script>
+<script src="/engine.js"></script>
+<script src="/room-manager.js"></script>
+<script>
+  let rm = null;
+  let myIsHost = false;
+  let remoteMuted = false;
+
+  // ── Join ──────────────────────────────────────────────────────────────────
+  async function joinRoom() {
+    const name = document.getElementById('inp-name').value.trim();
+    const roomId = document.getElementById('inp-room').value.trim();
+    const isHost = document.getElementById('chk-host').checked;
+    if (!name || !roomId) { alert('Enter your name and a room ID.'); return; }
+
+    myIsHost = isHost;
+    const socket = io();
+    const engine = new VoiceEngine();
+    rm = new RoomManager(engine, socket);
+
+    rm.addEventHandler(eventHandler);
+    engine.addEventHandler(eventHandler);
+
+    try {
+      await rm.signIn({ userName: name });
+      await rm.loginRoom({ roomId, isHost });
+      rm.startSoundLevels();
+      rm.createBGMPlayer();
+    } catch (e) {
+      alert('Could not access microphone: ' + e.message);
+      return;
+    }
+
+    document.getElementById('lobby').style.display = 'none';
+    document.getElementById('room').classList.add('visible');
+    document.getElementById('room-title').textContent = `🎙️ ${roomId}`;
+    document.getElementById('room-id-label').textContent = isHost ? 'Host' : 'Listener';
+    logMsg(null, `Joined room as ${isHost ? 'Host' : 'Guest'}`);
+  }
+
+  // ── Leave ─────────────────────────────────────────────────────────────────
+  async function leaveRoom() {
+    if (!rm) return;
+    await rm.leaveRoom();
+    document.getElementById('room').classList.remove('visible');
+    document.getElementById('lobby').style.display = '';
+    renderSeats(Array(8).fill(null));
+    document.getElementById('msgs-box').innerHTML = '';
+    rm = null;
+  }
+
+  function leaveSeat() { rm?.leaveSeat(); }
+
+  // ── Controls ──────────────────────────────────────────────────────────────
+  function toggleMic() {
+    if (!rm) return;
+    const muted = rm.toggleMic();
+    const btn = document.getElementById('btn-mic');
+    const lbl = document.getElementById('mic-label');
+    btn.classList.toggle('danger-active', muted);
+    btn.querySelector('.icon').textContent = muted ? '🔕' : '🎙️';
+    lbl.textContent = muted ? 'Unmute' : 'Mute';
+  }
+
+  function toggleRemoteMute() {
+    if (!rm) return;
+    remoteMuted = !remoteMuted;
+    rm.muteAllRemote(remoteMuted);
+    const btn = document.getElementById('btn-remote-mute');
+    btn.classList.toggle('danger-active', remoteMuted);
+    document.getElementById('remote-label').textContent = remoteMuted ? 'Unmute All' : 'Mute All';
+  }
+
+  function setEffect(preset, el) {
+    rm?.setVoiceEffect(preset);
+    document.querySelectorAll('.effect-chip').forEach(c => c.classList.remove('active'));
+    el.classList.add('active');
+  }
+
+  // ── BGM ───────────────────────────────────────────────────────────────────
+  function bgmLoad() {
+    const url = document.getElementById('bgm-url').value.trim();
+    if (!url) return;
+    rm?.loadBGM(url);
+    logMsg(null, 'BGM loaded');
+  }
+  function bgmPlay() {
+    const btn = document.getElementById('btn-bgm-play');
+    btn.querySelector('.icon').textContent = '⏸️';
+    rm?.playBGM();
+  }
+  function bgmStop() {
+    document.getElementById('btn-bgm-play').querySelector('.icon').textContent = '▶️';
+    rm?.stopBGM();
+  }
+  function bgmVol(v) { rm?.setBGMVolume(parseFloat(v)); }
+
+  // ── Seats ─────────────────────────────────────────────────────────────────
+  function renderSeats(seats) {
+    const grid = document.getElementById('seats-grid');
+    grid.innerHTML = '';
+    const myId = rm?.mySocketId;
+    seats.forEach((seat, i) => {
+      const div = document.createElement('div');
+      div.className = 'seat' + (seat ? ' occupied' : ' empty') +
+                      (seat?.socketId === myId ? ' mine' : '') +
+                      (myIsHost && seat && seat.socketId !== myId ? ' host-view' : '');
+      div.onclick = () => { if (!seat) rm?.takeSeat(i); };
+
+      div.innerHTML = `<span class="seat-num">${i === 0 ? '👑 0' : i}</span>` +
+        (seat ? `
+          <div class="avatar" id="av-${seat.socketId}">
+            ${seat.userName[0].toUpperCase()}
+            <div class="speaking-ring"></div>
+          </div>
+          <div class="seat-name">${esc(seat.userName)}</div>
+          <div class="seat-role">${i === 0 ? 'Host' : 'Speaker'}</div>
+          <div class="mute-dot${seat.muted ? ' muted' : ''}"></div>
+          ${myIsHost && seat.socketId !== myId
+            ? `<button class="remove-btn" onclick="event.stopPropagation();hostRemove(${i})">✕ Remove</button>`
+            : ''}
+        ` : `<div style="font-size:24px;color:var(--muted);">+</div><div style="font-size:12px;color:var(--muted);">Join</div>`);
+
+      grid.appendChild(div);
+    });
+  }
+
+  function hostRemove(idx) { rm?.removeSpeakerFromSeat(idx); }
+
+  // ── Sound levels ──────────────────────────────────────────────────────────
+  let lastLevels = {};
+  function renderLevels(levels) {
+    lastLevels = levels;
+    const row = document.getElementById('levels-row');
+    row.innerHTML = '';
+    for (const [id, val] of Object.entries(levels)) {
+      const label = id === 'local' ? 'You' : (rm?.peers[id]?.userName?.slice(0,4) || '…');
+      const h = Math.max(2, Math.round(val * 0.24 * 100) / 100);
+      row.innerHTML += `<div class="level-bar-wrap">
+        <div class="level-bar" style="height:${h}px;background:${id==='local'?'var(--accent)':'var(--green)'}"></div>
+      </div>`;
+      // Speaking ring
+      const av = document.getElementById(`av-${id === 'local' ? rm?.mySocketId : id}`);
+      if (av) av.classList.toggle('speaking', val > 8);
+    }
+    updatePeerCount();
+  }
+
+  function updatePeerCount() {
+    document.getElementById('peer-count').textContent = Object.keys(rm?.peers || {}).length;
+  }
+
+  // ── Log ───────────────────────────────────────────────────────────────────
+  function logMsg(from, text) {
+    const box = document.getElementById('msgs-box');
+    const d = document.createElement('div');
+    d.className = 'msg';
+    d.innerHTML = from
+      ? `<span class="from">${esc(from)}</span>: ${esc(text)}`
+      : `<span class="sys">${esc(text)}</span>`;
+    box.appendChild(d);
+    box.scrollTop = box.scrollHeight;
+  }
+
+  function esc(s) {
+    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  }
+
+  // ── Room state badge ──────────────────────────────────────────────────────
+  function setBadge(state) {
+    const b = document.getElementById('state-badge');
+    b.textContent = state;
+    b.className = 'state-badge ' + (state === 'connected' ? 'connected' : state === 'reconnecting' ? 'reconnecting' : state === 'reconnect_failed' ? 'failed' : '');
+  }
+
+  // ── Event Handler (IExpressEngineEventHandler equivalent) ─────────────────
+  const eventHandler = {
+    onRoomStateChanged({ state }) { setBadge(state); logMsg(null, `Room state: ${state}`); },
+    onRoomJoined({ roomId, peers }) { logMsg(null, `In room. ${peers.length} existing peer(s).`); },
+    onLeftRoom({ roomId }) { logMsg(null, 'Left room.'); },
+    onPeerJoined({ socketId, userName }) { logMsg(null, `${userName} joined`); updatePeerCount(); },
+    onPeerLeft({ socketId, userName }) { logMsg(null, `${userName || socketId} left`); updatePeerCount(); },
+    onPeerMuteChanged({ socketId, muted }) { /* seats will re-render */ },
+    onSeatUpdate({ seats }) { renderSeats(seats); },
+    onSeatChanged({ seatIndex, user }) { renderSeats(rm?.seats || []); },
+    onSeatTakeFailed({ seatIndex, reason }) { logMsg(null, `Seat ${seatIndex} is occupied.`); },
+    onSeatInviteReceived({ from, seatIndex }) {
+      if (confirm(`You've been invited to seat ${seatIndex}. Accept?`)) rm?.takeSeat(seatIndex);
+    },
+    onRemovedFromSeat({ seatIndex }) { logMsg(null, `You were removed from seat ${seatIndex}.`); renderSeats(rm?.seats || []); },
+    onSoundLevelUpdate({ levels }) { renderLevels(levels); },
+    onVoiceEffectChanged({ preset }) { logMsg(null, `Voice effect: ${preset}`); },
+    onMicStateChanged({ muted }) {},
+    onRemoteMuteChanged({ muted }) { logMsg(null, muted ? 'All remote audio muted' : 'Remote audio unmuted'); },
+    onBarrageReceived({ from, data }) {},
+    onCustomCommand({ from, data }) { logMsg(null, `Command from ${from}: ${data.type}`); },
+    onMediaPlayerCreated() {},
+    onMediaPlayerStateChanged({ state }) { logMsg(null, `BGM: ${state}`); },
+    onMediaPlayerDestroyed() {},
+    onRemoteStreamAdded({ socketId }) { logMsg(null, `Stream from ${rm?.peers[socketId]?.userName || socketId}`); },
+    onSignedIn({ userName }) {},
+    onSignedOut() {},
+    onICECandidate() {},
+    onPeerConnectionState({ socketId, state }) { if (state==='failed') logMsg(null,`Connection issue with peer`); },
+  };
+</script>
+</body>
+</html>
