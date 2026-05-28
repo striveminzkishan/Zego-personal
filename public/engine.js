@@ -228,7 +228,12 @@ class VoiceEngine {
 
   setAllRemoteMuted(muted) {
     this.allRemoteMuted = muted;
-    document.querySelectorAll('audio[data-remote]').forEach(el => { el.muted = muted; });
+    document.querySelectorAll('audio[data-remote]').forEach(el => {
+      el.muted = muted;
+      // Some browsers keep playing silently; ensure it takes effect quickly.
+      // (No pause() here — user might want continuous playback after unmute.)
+      el.volume = 1;
+    });
     this._emit('onRemoteMuteChanged', { muted });
   }
 

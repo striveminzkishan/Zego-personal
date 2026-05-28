@@ -271,6 +271,9 @@ class RoomManager {
       el.controls = false;
       document.body.appendChild(el);
     }
+    // Important: apply current "mute all" state to newly attached audio.
+    // Otherwise Mute All only affects audio elements that already existed.
+    el.muted = !!this.engine.allRemoteMuted;
     el.srcObject = stream;
 
     // FIX: browsers block autoplay — play() explicitly

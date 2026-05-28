@@ -1,7 +1,11 @@
 package com.voiceroom.demo;
 
 import android.Manifest;
+import android.content.Context;
 import android.content.pm.PackageManager;
+import android.media.AudioAttributes;
+import android.media.AudioFocusRequest;
+import android.media.AudioManager;
 import android.os.Bundle;
 import android.widget.Button;
 import android.widget.CheckBox;
@@ -46,10 +50,15 @@ public class VoiceChatActivity extends AppCompatActivity {
     private boolean remoteMuted = false;
     private boolean inRoom = false;
 
+    private AudioManager audioManager;
+    private AudioFocusRequest audioFocusRequest;
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_voice_chat);
+
+        audioManager = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
 
         editServerUrl = findViewById(R.id.editServerUrl);
         editUserName = findViewById(R.id.editUserName);
@@ -100,6 +109,8 @@ public class VoiceChatActivity extends AppCompatActivity {
         setUiInRoom(false);
         appendLog("Connecting…");
 
+        configureAudioForCall();
+
         VoiceConfig config = new VoiceConfig(serverUrl);
         roomManager = new VoiceRoomManager(this, config, eventListener);
 
@@ -120,6 +131,7 @@ public class VoiceChatActivity extends AppCompatActivity {
             setUiInRoom(false);
             appendLog("Left room");
             textStatus.setText("Disconnected");
+            restoreAudioAfterCall();
         });
     }
 
@@ -134,6 +146,40 @@ public class VoiceChatActivity extends AppCompatActivity {
         remoteMuted = !remoteMuted;
         roomManager.muteAllRemote(remoteMuted);
         btnMuteRemote.setText(remoteMuted ? "Unmute all remote" : "Mute all remote");
+    }
+
+    private void configureAudioForCall() {
+        if (audioManager == null) return;
+        try {
+            audioManager.setMode(AudioManager.MODE_IN_COMMUNICATION);
+            audioManager.setSpeakerphoneOn(true);
+
+            AudioAttributes attrs = new AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                    .build();
+            audioFocusRequest = new AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
+                    .setAudioAttributes(attrs)
+                    .setAcceptsDelayedFocusGain(true)
+                    .setOnAudioFocusChangeListener(focusChange -> { /* ignore */ })
+                    .build();
+            audioManager.requestAudioFocus(audioFocusRequest);
+        } catch (Exception e) {
+            appendLog("Audio setup warning: " + e.getMessage());
+        }
+    }
+
+    private void restoreAudioAfterCall() {
+        if (audioManager == null) return;
+        try {
+            if (audioFocusRequest != null) {
+                audioManager.abandonAudioFocusRequest(audioFocusRequest);
+                audioFocusRequest = null;
+            }
+            audioManager.setSpeakerphoneOn(false);
+            audioManager.setMode(AudioManager.MODE_NORMAL);
+        } catch (Exception ignored) {
+        }
     }
 
     private void setUiInRoom(boolean joined) {
@@ -218,6 +264,7 @@ public class VoiceChatActivity extends AppCompatActivity {
         if (roomManager != null) {
             roomManager.logout(() -> roomManager = null);
         }
+        restoreAudioAfterCall();
         super.onDestroy();
     }
 

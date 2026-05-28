@@ -6,6 +6,7 @@ import android.util.Log;
 import org.json.JSONObject;
 import org.webrtc.AudioSource;
 import org.webrtc.AudioTrack;
+import org.webrtc.JavaAudioDeviceModule;
 import org.webrtc.DataChannel;
 import org.webrtc.IceCandidate;
 import org.webrtc.MediaConstraints;
@@ -44,6 +45,7 @@ public class WebRtcVoiceEngine {
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
 
     private PeerConnectionFactory factory;
+    private JavaAudioDeviceModule adm;
     private AudioSource audioSource;
     private AudioTrack localAudioTrack;
     private final Map<String, PeerConnection> peerConnections = new ConcurrentHashMap<>();
@@ -68,7 +70,10 @@ public class WebRtcVoiceEngine {
                                 .createInitializationOptions();
                 PeerConnectionFactory.initialize(initOptions);
 
+                // Ensure audio playout/recording is correctly wired on Android.
+                adm = JavaAudioDeviceModule.builder(appContext).createAudioDeviceModule();
                 factory = PeerConnectionFactory.builder()
+                        .setAudioDeviceModule(adm)
                         .createPeerConnectionFactory();
 
                 Log.d(TAG, "PeerConnectionFactory ready");
@@ -84,6 +89,9 @@ public class WebRtcVoiceEngine {
         executor.execute(() -> {
             try {
                 MediaConstraints constraints = new MediaConstraints();
+                constraints.mandatory.add(new MediaConstraints.KeyValuePair("googEchoCancellation", "true"));
+                constraints.mandatory.add(new MediaConstraints.KeyValuePair("googNoiseSuppression", "true"));
+                constraints.mandatory.add(new MediaConstraints.KeyValuePair("googAutoGainControl", "true"));
                 audioSource = factory.createAudioSource(constraints);
                 localAudioTrack = factory.createAudioTrack("ARDAMSAudioTrack", audioSource);
                 localAudioTrack.setEnabled(true);
@@ -318,6 +326,10 @@ public class WebRtcVoiceEngine {
             if (factory != null) {
                 factory.dispose();
                 factory = null;
+            }
+            if (adm != null) {
+                adm.release();
+                adm = null;
             }
             remoteAudioTracks.clear();
             onDone.run();
